@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { ChevronDown, GripVertical, Trash2 } from "lucide-react"
+import { DownloadButton } from "@/components/download-button"
 import {
   Collapsible,
   CollapsibleContent,
@@ -94,7 +95,14 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
         </Badge>
         <span className="text-[10px] text-muted-foreground">{time}</span>
         {allData && (
-          <CopyButton value={allData} className="ml-auto" />
+          <>
+            <DownloadButton
+              content={allData}
+              filename={`clipboard-${snapshot.source}-${index + 1}`}
+              className="ml-auto"
+            />
+            <CopyButton value={allData} />
+          </>
         )}
         <Button
           variant="ghost"
@@ -124,7 +132,7 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
                 )}
               </div>
               {entry.data != null && entry.data.length > 0 && (
-                <DataDump data={entry.data} />
+                <DataDump data={entry.data} mimeType={entry.type} />
               )}
               {entry.file && <FilePreview file={entry.file} />}
               {/* For the "Files" type, show a note pointing to .files section */}
@@ -154,7 +162,7 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
                 </Badge>
               </div>
               {entry.data != null && entry.data.length > 0 && (
-                <DataDump data={entry.data} />
+                <DataDump data={entry.data} mimeType={entry.type} />
               )}
               {entry.file && <FilePreview file={entry.file} />}
             </div>
