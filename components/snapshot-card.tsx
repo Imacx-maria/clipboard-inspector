@@ -22,6 +22,14 @@ interface SnapshotCardProps {
   onDelete: (id: string) => void
 }
 
+const MDN_BASE = "https://developer.mozilla.org/en-US/docs/Web/API"
+
+const SECTION_MDN: Record<string, string> = {
+  ".types": "DataTransfer/types",
+  ".items": "DataTransfer/items",
+  ".files": "DataTransfer/files",
+}
+
 const sourceLabels = {
   paste: "Paste",
   drop: "Drop",
@@ -39,11 +47,13 @@ function Section({
   count,
   children,
   defaultOpen = true,
+  mdnUrl,
 }: {
   title: string
   count: number
   children: React.ReactNode
   defaultOpen?: boolean
+  mdnUrl?: string
 }) {
   if (count === 0) return null
 
@@ -51,7 +61,19 @@ function Section({
     <Collapsible defaultOpen={defaultOpen}>
       <CollapsibleTrigger className="flex w-full items-center gap-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
         <ChevronDown className="size-3 transition-transform [[data-state=closed]>&]:rotate-[-90deg]" />
-        {title}
+        {mdnUrl ? (
+          <a
+            href={`${MDN_BASE}/${mdnUrl}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {title}
+          </a>
+        ) : (
+          <span className="font-mono">{title}</span>
+        )}
         <Badge variant="secondary" className="ml-auto text-[10px]">
           {count}
         </Badge>
@@ -118,7 +140,7 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
       {/* Content */}
       <div className="px-3 pt-2">
         {/* Types */}
-        <Section title=".types" count={snapshot.types.length}>
+        <Section title=".types" count={snapshot.types.length} mdnUrl={SECTION_MDN[".types"]}>
           {snapshot.types.map((entry, i) => (
             <div key={i} className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
@@ -150,6 +172,7 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
           title=".items"
           count={snapshot.items.length}
           defaultOpen={isDrop || hasFiles}
+          mdnUrl={SECTION_MDN[".items"]}
         >
           {snapshot.items.map((entry, i) => (
             <div key={i} className="flex flex-col gap-1.5">
@@ -174,6 +197,7 @@ export function SnapshotCard({ snapshot, index, onDelete }: SnapshotCardProps) {
           title=".files"
           count={snapshot.files.length}
           defaultOpen={hasFiles}
+          mdnUrl={SECTION_MDN[".files"]}
         >
           {snapshot.files.map((file, i) => (
             <FilePreview key={i} file={file} />

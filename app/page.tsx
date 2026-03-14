@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import {
-  Clipboard,
   Trash2,
   ArrowDown,
   ClipboardPaste,
@@ -32,7 +31,6 @@ import { SnapshotCard } from "@/components/snapshot-card"
 import { FlowPartyLogo } from "@/components/flow-party-logo"
 import {
   extractFromDataTransfer,
-  extractFromClipboardAPI,
   type ClipboardSnapshot,
 } from "@/lib/clipboard"
 
@@ -57,69 +55,12 @@ export default function Page() {
     setSnapshots([])
   }, [])
 
-  // Paste handler — multi-layer defense:
-  // 1. Non-async handler so the browser doesn't see a Promise return
-  // 2. No e.preventDefault() — it can cause browsers to restrict access
-  //    to custom MIME types like application/json (WebFlow's XscpData)
-  // 3. Clipboard API read is initiated SYNCHRONOUSLY during the paste
-  //    event while user activation is still valid, not after an async callback
-  // 4. Fire-and-forget: synchronous DataTransfer reads start immediately,
-  //    async resolution + fallback happen in .then()
   React.useEffect(() => {
     function handlePaste(e: ClipboardEvent) {
       if (!e.clipboardData) return
-
-      console.log("[clipboard-inspector] paste event, types:", Array.from(e.clipboardData.types))
-
-      // All synchronous reads (getData, getAsString, getAsFile) are
-      // initiated inside extractFromDataTransfer before its first await.
-      const snapshotPromise = extractFromDataTransfer(e.clipboardData, "paste")
-
-      // Start Clipboard API read NOW while we have user activation —
-      // by the time .then() fires, transient activation may have expired
-      let clipboardApiPromise: Promise<ClipboardSnapshot | null> | null = null
-      if (typeof navigator.clipboard?.read === "function") {
-        clipboardApiPromise = extractFromClipboardAPI().catch((err) => {
-          console.log("[clipboard-inspector] Clipboard API pre-read failed:", err)
-          return null
-        })
-      }
-
-      // Resolve async, then check if the snapshot is effectively empty.
-      // If so, use the pre-read Clipboard API result as fallback.
-      snapshotPromise.then(async (snapshot) => {
-        const hasTypeData = snapshot.types.some(
-          (t) => t.data !== null && t.data !== ""
-        )
-        const hasItemData = snapshot.items.some((i) => i.data || i.file)
-        const hasFiles = snapshot.files.length > 0
-
-        if (hasTypeData || hasItemData || hasFiles) {
-          console.log("[clipboard-inspector] DataTransfer had data")
-          addSnapshot(snapshot)
-          return
-        }
-
-        console.log("[clipboard-inspector] DataTransfer empty, trying Clipboard API fallback")
-
-        // DataTransfer was empty — try pre-read Clipboard API result
-        if (clipboardApiPromise) {
-          const fallback = await clipboardApiPromise
-          if (
-            fallback &&
-            (fallback.types.length > 0 ||
-              fallback.items.length > 0 ||
-              fallback.files.length > 0)
-          ) {
-            console.log("[clipboard-inspector] Clipboard API fallback succeeded")
-            addSnapshot({ ...fallback, source: "paste" })
-            return
-          }
-        }
-
-        console.log("[clipboard-inspector] Both sources empty")
-        addSnapshot(snapshot)
-      })
+      // Fire-and-forget: sync reads are initiated inside extractFromDataTransfer
+      // before its first await, so DataTransfer won't be stale.
+      extractFromDataTransfer(e.clipboardData, "paste").then(addSnapshot)
     }
 
     document.addEventListener("paste", handlePaste)
@@ -163,16 +104,6 @@ export default function Page() {
     [addSnapshot]
   )
 
-  // Clipboard API read
-  const handleClipboardRead = React.useCallback(async () => {
-    try {
-      const snapshot = await extractFromClipboardAPI()
-      addSnapshot(snapshot)
-    } catch (err) {
-      console.error("Clipboard API read failed:", err)
-    }
-  }, [addSnapshot])
-
   return (
     <div
       ref={dropZoneRef}
@@ -194,21 +125,23 @@ export default function Page() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <button
-            type="button"
+          <div
+            role="button"
+            tabIndex={0}
             onClick={clearAll}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") clearAll() }}
             className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
           >
             <TooltipProvider>
               <Tooltip>
-                <TooltipTrigger>
+                <TooltipTrigger render={<span />}>
                   <FlowPartyLogo size={20} />
                 </TooltipTrigger>
                 <TooltipContent>Flow Party</TooltipContent>
               </Tooltip>
             </TooltipProvider>
             <h1 className="text-sm font-medium">Clipboard Inspector</h1>
-          </button>
+          </div>
           {snapshots.length > 0 && (
             <Badge variant="secondary" className="text-[10px]">
               {snapshots.length}
@@ -263,41 +196,37 @@ export default function Page() {
                 </p>
               </div>
 
-              <div className="flex flex-col items-center gap-3">
+              <div className="flex w-full flex-col gap-3">
                 <p className="text-sm text-muted-foreground">
-                  <span
-                    ref={pasteTargetRef}
-                    contentEditable
-                    suppressContentEditableWarning
-                    className="border border-dashed border-muted-foreground/30 px-2 py-0.5 outline-none focus:border-muted-foreground/60"
-                    onPaste={() => {
-                      if (pasteTargetRef.current) {
-                        requestAnimationFrame(() => {
-                          if (pasteTargetRef.current) {
-                            pasteTargetRef.current.textContent = "paste here"
-                          }
-                        })
-                      }
-                    }}
-                    onInput={(e) => {
-                      const target = e.currentTarget
-                      requestAnimationFrame(() => {
-                        target.textContent = "paste here"
-                      })
-                    }}
-                  >
-                    paste here
-                  </span>
-                  , drag &amp; drop a file, or read from the API.
+                  Press{" "}
+                  <kbd className="rounded border px-1.5 py-0.5 font-mono text-xs">Ctrl+V</kbd>
+                  {" "}/{" "}
+                  <kbd className="rounded border px-1.5 py-0.5 font-mono text-xs">⌘V</kbd>
+                  {" "}anywhere on this page, or drag &amp; drop a file.
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleClipboardRead}
+                <span
+                  ref={pasteTargetRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  className="block w-full rounded border border-dashed border-muted-foreground/30 py-5 text-center text-xs text-muted-foreground outline-none focus:border-muted-foreground/60"
+                  onPaste={() => {
+                    if (pasteTargetRef.current) {
+                      requestAnimationFrame(() => {
+                        if (pasteTargetRef.current) {
+                          pasteTargetRef.current.textContent = "paste here"
+                        }
+                      })
+                    }
+                  }}
+                  onInput={(e) => {
+                    const target = e.currentTarget
+                    requestAnimationFrame(() => {
+                      target.textContent = "paste here"
+                    })
+                  }}
                 >
-                  <Clipboard className="size-3.5" />
-                  Read Clipboard API
-                </Button>
+                  paste here
+                </span>
               </div>
             </div>
 
@@ -310,7 +239,7 @@ export default function Page() {
                     How to capture
                   </h3>
                 </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="flex gap-2">
                     <ClipboardPaste className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
                     <div>
@@ -324,7 +253,7 @@ export default function Page() {
                         <kbd className="border px-1 py-0.5 font-mono text-[10px]">
                           ⌘V
                         </kbd>{" "}
-                        on this page.
+                        anywhere on this page.
                       </p>
                     </div>
                   </div>
@@ -337,23 +266,12 @@ export default function Page() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Clipboard className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                    <div>
-                      <p className="text-xs text-foreground">Clipboard API</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        Click the button above to read directly. May prompt for
-                        permission.
-                      </p>
-                    </div>
-                  </div>
                 </div>
                 <p className="text-[10px] text-muted-foreground/70">
                   Each capture creates a snapshot showing{" "}
                   <code className="font-mono">.types</code>,{" "}
                   <code className="font-mono">.items</code>, and{" "}
-                  <code className="font-mono">.files</code> from the
-                  DataTransfer or ClipboardItem.
+                  <code className="font-mono">.files</code> from the DataTransfer event.
                 </p>
               </CardContent>
             </Card>
@@ -475,16 +393,6 @@ export default function Page() {
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleClipboardRead}
-              >
-                <Clipboard className="size-3.5" />
-                Read Clipboard API
-              </Button>
-            </div>
             {snapshots.map((snapshot, i) => (
               <SnapshotCard
                 key={snapshot.id}
