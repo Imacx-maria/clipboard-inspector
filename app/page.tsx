@@ -19,7 +19,14 @@ import {
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip"
 import { SnapshotCard } from "@/components/snapshot-card"
+import { FlowPartyLogo } from "@/components/flow-party-logo"
 import {
   extractFromDataTransfer,
   extractFromClipboardAPI,
@@ -125,7 +132,14 @@ export default function Page() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <Clipboard className="size-4" />
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <FlowPartyLogo size={20} />
+              </TooltipTrigger>
+              <TooltipContent>Flow Party</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <h1 className="text-sm font-medium">Clipboard Inspector</h1>
           {snapshots.length > 0 && (
             <>
