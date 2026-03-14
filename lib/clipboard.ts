@@ -11,6 +11,7 @@ export interface FileInfo {
   type: string
   url: string
   textContent?: string | null
+  dimensions?: { width: number; height: number } | null
 }
 
 export interface ClipboardSnapshot {
@@ -29,6 +30,15 @@ function formatFileSize(bytes: number): string {
 }
 
 export { formatFileSize }
+
+function getImageDimensions(url: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    img.onerror = () => resolve(null)
+    img.src = url
+  })
+}
 
 async function readAsText(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -71,6 +81,10 @@ async function makeFileInfo(file: File): Promise<FileInfo> {
     }
   }
 
+  if (file.type.startsWith("image/")) {
+    fi.dimensions = await getImageDimensions(fi.url)
+  }
+
   return fi
 }
 
@@ -96,6 +110,7 @@ export async function extractFromDataTransfer(
     }
     try {
       const data = dt.getData(type)
+      console.log(`[clipboard-inspector] getData("${type}") =`, JSON.stringify(data).slice(0, 80))
       types.push({ type, kind: "string", data })
     } catch {
       types.push({ type, kind: "string", data: null })
@@ -108,15 +123,24 @@ export async function extractFromDataTransfer(
   // causes the DataTransfer to be cleared by the browser.
   const itemPromises: Promise<ClipboardEntry | null>[] = []
   if (dt.items) {
+    console.log(`[clipboard-inspector] dt.items.length = ${dt.items.length}`)
     for (let i = 0; i < dt.items.length; i++) {
       const item = dt.items[i]
       const kind = item.kind
       const type = item.type
+      console.log(`[clipboard-inspector] item[${i}]: kind="${kind}" type="${type}"`)
       if (kind === "string") {
-        // Initiate the async read NOW (synchronously) — resolve later
-        const dataPromise = new Promise<string>((resolve) =>
-          item.getAsString(resolve)
-        )
+        // Initiate the async read NOW (synchronously) — resolve later.
+        // Use a timeout fallback: for clipboard data written via
+        // navigator.clipboard.write() (e.g. Webflow), getAsString() callback
+        // may never fire — the timeout prevents Promise.all from hanging.
+        const dataPromise = new Promise<string>((resolve) => {
+          const timer = setTimeout(() => resolve(""), 300)
+          item.getAsString((data) => {
+            clearTimeout(timer)
+            resolve(data)
+          })
+        })
         itemPromises.push(
           dataPromise.then(
             (data): ClipboardEntry => ({ type, kind: "string", data })
@@ -158,6 +182,20 @@ export async function extractFromDataTransfer(
   const resolvedFiles = await Promise.all(filePromises)
   files.push(...resolvedFiles)
 
+  // Post-processing: for types where getData() returned "" (common for blobs
+  // written via navigator.clipboard.write()), check if dt.items has a file
+  // entry for the same type with readable text content — use that instead.
+  const itemByType = new Map(items.map((it) => [it.type, it]))
+  for (const entry of types) {
+    if (entry.data === null || entry.data === "") {
+      const match = itemByType.get(entry.type)
+      if (match?.kind === "file" && match.file?.textContent) {
+        console.log(`[clipboard-inspector] Cross-referencing file item for type "${entry.type}"`)
+        entry.data = match.file.textContent
+      }
+    }
+  }
+
   return {
     id: crypto.randomUUID(),
     timestamp: Date.now(),
@@ -169,6 +207,7 @@ export async function extractFromDataTransfer(
 }
 
 export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
+  console.log("[clipboard-inspector] extractFromClipboardAPI() called")
   let clipboardItems: ClipboardItems
 
   // Try reading with the `unsanitized` option first (Chrome 122+).
@@ -186,9 +225,11 @@ export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
         "text/uri-list",
       ],
     })
-  } catch {
-    // Fall back to standard read (Firefox, older browsers)
+    console.log("[clipboard-inspector] Unsanitized read succeeded, items:", clipboardItems.length)
+  } catch (e) {
+    console.log("[clipboard-inspector] Unsanitized read failed:", e, "— falling back to standard read")
     clipboardItems = await navigator.clipboard.read()
+    console.log("[clipboard-inspector] Standard read succeeded, items:", clipboardItems.length)
   }
 
   const types: ClipboardEntry[] = []
@@ -196,9 +237,11 @@ export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
   const files: FileInfo[] = []
 
   for (const item of clipboardItems) {
+    console.log("[clipboard-inspector] ClipboardItem types:", item.types)
     for (const type of item.types) {
       try {
         const blob = await item.getType(type)
+        console.log(`[clipboard-inspector] getType("${type}") blob size:`, blob.size, "isTextMime:", isTextMime(type))
 
         // Use isTextMime to also catch application/json, application/xml,
         // image/svg+xml, etc. — not just text/* prefixed types.
@@ -207,11 +250,16 @@ export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
           types.push({ type, kind: "string", data: text })
           items.push({ type, kind: "string", data: text })
         } else {
+          const blobUrl = URL.createObjectURL(blob)
           const fi: FileInfo = {
             name: `clipboard.${type.split("/")[1] || "bin"}`,
             size: blob.size,
             type: blob.type,
-            url: URL.createObjectURL(blob),
+            url: blobUrl,
+          }
+
+          if (type.startsWith("image/")) {
+            fi.dimensions = await getImageDimensions(blobUrl)
           }
 
           // Try reading text content for text-like blobs that isTextMime

@@ -10,7 +10,7 @@ interface FilePreviewProps {
 }
 
 export function FilePreview({ file }: FilePreviewProps) {
-  const isImage = file.type.startsWith("image/") && !file.type.includes("svg")
+  const isImage = file.type.startsWith("image/")
 
   return (
     <div className="flex flex-col gap-2 rounded border bg-muted/50 p-3">
@@ -33,6 +33,11 @@ export function FilePreview({ file }: FilePreviewProps) {
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">{file.type}</Badge>
             <Badge variant="outline">{formatFileSize(file.size)}</Badge>
+            {file.dimensions && (
+              <Badge variant="outline">
+                {file.dimensions.width} × {file.dimensions.height}
+              </Badge>
+            )}
           </div>
           <a
             href={file.url}
@@ -45,7 +50,7 @@ export function FilePreview({ file }: FilePreviewProps) {
         </div>
       </div>
       {file.textContent && (
-        <DataDump data={file.textContent} maxHeight="400px" />
+        <DataDump data={file.textContent} maxHeight="400px" mimeType={file.type} />
       )}
     </div>
   )
