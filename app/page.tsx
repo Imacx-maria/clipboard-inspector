@@ -15,7 +15,10 @@ import {
   FileType,
   File,
   Info,
+  Sun,
+  Moon,
 } from "lucide-react"
+import { useTheme } from "next-themes"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -38,6 +41,7 @@ export default function Page() {
   const [isDragOver, setIsDragOver] = React.useState(false)
   const dropZoneRef = React.useRef<HTMLDivElement>(null)
   const pasteTargetRef = React.useRef<HTMLSpanElement>(null)
+  const { resolvedTheme, setTheme } = useTheme()
 
   const addSnapshot = React.useCallback((snapshot: ClipboardSnapshot) => {
     setSnapshots((prev) => [snapshot, ...prev])
@@ -51,24 +55,36 @@ export default function Page() {
     setSnapshots([])
   }, [])
 
-  // Paste handler — mirrors the evercoder clipboard-inspector pattern:
+  // Paste handler — multi-layer defense:
   // 1. Non-async handler so the browser doesn't see a Promise return
   // 2. No e.preventDefault() — it can cause browsers to restrict access
   //    to custom MIME types like application/json (WebFlow's XscpData)
-  // 3. Fire-and-forget: synchronous DataTransfer reads start immediately,
+  // 3. Clipboard API read is initiated SYNCHRONOUSLY during the paste
+  //    event while user activation is still valid, not after an async callback
+  // 4. Fire-and-forget: synchronous DataTransfer reads start immediately,
   //    async resolution + fallback happen in .then()
   React.useEffect(() => {
     function handlePaste(e: ClipboardEvent) {
       if (!e.clipboardData) return
 
+      console.log("[clipboard-inspector] paste event, types:", Array.from(e.clipboardData.types))
+
       // All synchronous reads (getData, getAsString, getAsFile) are
       // initiated inside extractFromDataTransfer before its first await.
       const snapshotPromise = extractFromDataTransfer(e.clipboardData, "paste")
 
+      // Start Clipboard API read NOW while we have user activation —
+      // by the time .then() fires, transient activation may have expired
+      let clipboardApiPromise: Promise<ClipboardSnapshot | null> | null = null
+      if (typeof navigator.clipboard?.read === "function") {
+        clipboardApiPromise = extractFromClipboardAPI().catch((err) => {
+          console.log("[clipboard-inspector] Clipboard API pre-read failed:", err)
+          return null
+        })
+      }
+
       // Resolve async, then check if the snapshot is effectively empty.
-      // If so, fall back to the Clipboard API as a defensive measure
-      // (handles browser-specific restrictions on application/json via
-      // the paste event's DataTransfer).
+      // If so, use the pre-read Clipboard API result as fallback.
       snapshotPromise.then(async (snapshot) => {
         const hasTypeData = snapshot.types.some(
           (t) => t.data !== null && t.data !== ""
@@ -77,30 +93,29 @@ export default function Page() {
         const hasFiles = snapshot.files.length > 0
 
         if (hasTypeData || hasItemData || hasFiles) {
+          console.log("[clipboard-inspector] DataTransfer had data")
           addSnapshot(snapshot)
           return
         }
 
-        // DataTransfer was empty — try Clipboard API as fallback
-        try {
-          const fallback = await extractFromClipboardAPI()
-          const fallbackHasData =
-            fallback.types.length > 0 ||
-            fallback.items.length > 0 ||
-            fallback.files.length > 0
+        console.log("[clipboard-inspector] DataTransfer empty, trying Clipboard API fallback")
 
-          if (fallbackHasData) {
-            // Use fallback data but keep source as "paste" since the
-            // user initiated it via Ctrl+V / ⌘V
+        // DataTransfer was empty — try pre-read Clipboard API result
+        if (clipboardApiPromise) {
+          const fallback = await clipboardApiPromise
+          if (
+            fallback &&
+            (fallback.types.length > 0 ||
+              fallback.items.length > 0 ||
+              fallback.files.length > 0)
+          ) {
+            console.log("[clipboard-inspector] Clipboard API fallback succeeded")
             addSnapshot({ ...fallback, source: "paste" })
             return
           }
-        } catch (err) {
-          console.error("Clipboard API fallback failed:", err)
         }
 
-        // Both DataTransfer and Clipboard API were empty — still record
-        // the snapshot so the user sees something was captured
+        console.log("[clipboard-inspector] Both sources empty")
         addSnapshot(snapshot)
       })
     }
@@ -177,31 +192,51 @@ export default function Page() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger>
-                <FlowPartyLogo size={20} />
-              </TooltipTrigger>
-              <TooltipContent>Flow Party</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <h1 className="text-sm font-medium">Clipboard Inspector</h1>
+          <button
+            type="button"
+            onClick={clearAll}
+            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+          >
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger>
+                  <FlowPartyLogo size={20} />
+                </TooltipTrigger>
+                <TooltipContent>Flow Party</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <h1 className="text-sm font-medium">Clipboard Inspector</h1>
+          </button>
           {snapshots.length > 0 && (
-            <>
-              <Badge variant="secondary" className="text-[10px]">
-                {snapshots.length}
-              </Badge>
+            <Badge variant="secondary" className="text-[10px]">
+              {snapshots.length}
+            </Badge>
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+              className="text-muted-foreground"
+            >
+              {resolvedTheme === "dark" ? (
+                <Sun className="size-3.5" />
+              ) : (
+                <Moon className="size-3.5" />
+              )}
+            </Button>
+            {snapshots.length > 0 && (
               <Button
                 variant="ghost"
                 size="xs"
-                className="ml-auto text-muted-foreground hover:text-destructive"
+                className="text-muted-foreground hover:text-destructive"
                 onClick={clearAll}
               >
                 <Trash2 className="size-3" />
                 Clear all
               </Button>
-            </>
-          )}
+            )}
+          </div>
         </div>
       </header>
 
@@ -229,10 +264,13 @@ export default function Page() {
                     contentEditable
                     suppressContentEditableWarning
                     className="border border-dashed border-muted-foreground/30 px-2 py-0.5 outline-none focus:border-muted-foreground/60"
-                    onPaste={(e) => {
-                      e.preventDefault()
+                    onPaste={() => {
                       if (pasteTargetRef.current) {
-                        pasteTargetRef.current.textContent = "paste here"
+                        requestAnimationFrame(() => {
+                          if (pasteTargetRef.current) {
+                            pasteTargetRef.current.textContent = "paste here"
+                          }
+                        })
                       }
                     }}
                     onInput={(e) => {
@@ -427,12 +465,7 @@ export default function Page() {
               </div>
             </div>
 
-            {/* Dark mode hint */}
-            <div className="text-center font-mono text-[10px] text-muted-foreground/50">
-              Press{" "}
-              <kbd className="border px-1 py-0.5">d</kbd>{" "}
-              to toggle dark mode
-            </div>
+
           </div>
         ) : (
           <div className="flex flex-col gap-4">
