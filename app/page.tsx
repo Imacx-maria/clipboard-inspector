@@ -51,13 +51,58 @@ export default function Page() {
     setSnapshots([])
   }, [])
 
-  // Paste handler
+  // Paste handler — mirrors the evercoder clipboard-inspector pattern:
+  // 1. Non-async handler so the browser doesn't see a Promise return
+  // 2. No e.preventDefault() — it can cause browsers to restrict access
+  //    to custom MIME types like application/json (WebFlow's XscpData)
+  // 3. Fire-and-forget: synchronous DataTransfer reads start immediately,
+  //    async resolution + fallback happen in .then()
   React.useEffect(() => {
-    async function handlePaste(e: ClipboardEvent) {
+    function handlePaste(e: ClipboardEvent) {
       if (!e.clipboardData) return
-      e.preventDefault()
-      const snapshot = await extractFromDataTransfer(e.clipboardData, "paste")
-      addSnapshot(snapshot)
+
+      // All synchronous reads (getData, getAsString, getAsFile) are
+      // initiated inside extractFromDataTransfer before its first await.
+      const snapshotPromise = extractFromDataTransfer(e.clipboardData, "paste")
+
+      // Resolve async, then check if the snapshot is effectively empty.
+      // If so, fall back to the Clipboard API as a defensive measure
+      // (handles browser-specific restrictions on application/json via
+      // the paste event's DataTransfer).
+      snapshotPromise.then(async (snapshot) => {
+        const hasTypeData = snapshot.types.some(
+          (t) => t.data !== null && t.data !== ""
+        )
+        const hasItemData = snapshot.items.some((i) => i.data || i.file)
+        const hasFiles = snapshot.files.length > 0
+
+        if (hasTypeData || hasItemData || hasFiles) {
+          addSnapshot(snapshot)
+          return
+        }
+
+        // DataTransfer was empty — try Clipboard API as fallback
+        try {
+          const fallback = await extractFromClipboardAPI()
+          const fallbackHasData =
+            fallback.types.length > 0 ||
+            fallback.items.length > 0 ||
+            fallback.files.length > 0
+
+          if (fallbackHasData) {
+            // Use fallback data but keep source as "paste" since the
+            // user initiated it via Ctrl+V / ⌘V
+            addSnapshot({ ...fallback, source: "paste" })
+            return
+          }
+        } catch (err) {
+          console.error("Clipboard API fallback failed:", err)
+        }
+
+        // Both DataTransfer and Clipboard API were empty — still record
+        // the snapshot so the user sees something was captured
+        addSnapshot(snapshot)
+      })
     }
 
     document.addEventListener("paste", handlePaste)
