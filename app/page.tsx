@@ -42,6 +42,8 @@ export default function Page() {
   const dropZoneRef = React.useRef<HTMLDivElement>(null)
   const pasteTargetRef = React.useRef<HTMLSpanElement>(null)
   const { resolvedTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
 
   const addSnapshot = React.useCallback((snapshot: ClipboardSnapshot) => {
     setSnapshots((prev) => [snapshot, ...prev])
@@ -219,10 +221,14 @@ export default function Page() {
               onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
               className="text-muted-foreground"
             >
-              {resolvedTheme === "dark" ? (
-                <Sun className="size-3.5" />
+              {mounted ? (
+                resolvedTheme === "dark" ? (
+                  <Sun className="size-3.5" />
+                ) : (
+                  <Moon className="size-3.5" />
+                )
               ) : (
-                <Moon className="size-3.5" />
+                <span className="size-3.5" />
               )}
             </Button>
             {snapshots.length > 0 && (
