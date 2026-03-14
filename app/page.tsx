@@ -15,6 +15,7 @@ export default function Page() {
   const [snapshots, setSnapshots] = React.useState<ClipboardSnapshot[]>([])
   const [isDragOver, setIsDragOver] = React.useState(false)
   const dropZoneRef = React.useRef<HTMLDivElement>(null)
+  const pasteTargetRef = React.useRef<HTMLSpanElement>(null)
 
   const addSnapshot = React.useCallback((snapshot: ClipboardSnapshot) => {
     setSnapshots((prev) => [snapshot, ...prev])
@@ -136,8 +137,30 @@ export default function Page() {
           <div className="flex flex-col items-center gap-6 pt-24 text-center">
             <div className="flex flex-col gap-2">
               <p className="text-sm text-muted-foreground">
-                Paste anything here, drag &amp; drop, or use the Clipboard API
-                button.
+                <span
+                  ref={pasteTargetRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  className="rounded border border-dashed border-muted-foreground/30 px-2 py-0.5 outline-none focus:border-muted-foreground/60"
+                  onPaste={(e) => {
+                    // Prevent the contentEditable from inserting content
+                    e.preventDefault()
+                    // Clear any accidentally typed text
+                    if (pasteTargetRef.current) {
+                      pasteTargetRef.current.textContent = "paste here"
+                    }
+                  }}
+                  onInput={(e) => {
+                    // Reset if user types into the span
+                    const target = e.currentTarget
+                    requestAnimationFrame(() => {
+                      target.textContent = "paste here"
+                    })
+                  }}
+                >
+                  paste here
+                </span>
+                , drag &amp; drop, or use the Clipboard API button.
               </p>
               <p className="text-xs text-muted-foreground/70">
                 Every MIME type and its raw data will be displayed with copy

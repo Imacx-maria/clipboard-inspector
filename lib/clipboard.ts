@@ -82,7 +82,11 @@ export async function extractFromDataTransfer(
   const items: ClipboardEntry[] = []
   const files: FileInfo[] = []
 
-  // Extract types
+  // === SYNCHRONOUS PHASE ===
+  // DataTransfer and its items become stale after the event handler yields
+  // to the microtask queue. All reads must be initiated synchronously.
+
+  // Extract types (getData is synchronous — safe to call inline)
   for (const type of dt.types) {
     if (type === "Files") {
       // "Files" is a special type — getData returns empty string.
@@ -98,31 +102,61 @@ export async function extractFromDataTransfer(
     }
   }
 
-  // Extract items
+  // Initiate ALL item reads synchronously before any await.
+  // getAsString callbacks and getAsFile() must be called in the same
+  // synchronous tick as the event handler; awaiting between items
+  // causes the DataTransfer to be cleared by the browser.
+  const itemPromises: Promise<ClipboardEntry | null>[] = []
   if (dt.items) {
     for (let i = 0; i < dt.items.length; i++) {
       const item = dt.items[i]
-      if (item.kind === "string") {
-        const data = await new Promise<string>((resolve) =>
+      const kind = item.kind
+      const type = item.type
+      if (kind === "string") {
+        // Initiate the async read NOW (synchronously) — resolve later
+        const dataPromise = new Promise<string>((resolve) =>
           item.getAsString(resolve)
         )
-        items.push({ type: item.type, kind: "string", data })
-      } else if (item.kind === "file") {
+        itemPromises.push(
+          dataPromise.then(
+            (data): ClipboardEntry => ({ type, kind: "string", data })
+          )
+        )
+      } else if (kind === "file") {
+        // getAsFile() is synchronous — capture the File reference now
         const file = item.getAsFile()
         if (file) {
-          const fi = await makeFileInfo(file)
-          items.push({ type: item.type, kind: "file", data: null, file: fi })
+          itemPromises.push(
+            makeFileInfo(file).then(
+              (fi): ClipboardEntry => ({
+                type,
+                kind: "file",
+                data: null,
+                file: fi,
+              })
+            )
+          )
         }
       }
     }
   }
 
-  // Extract files
+  // Capture file references synchronously before awaiting
+  const filePromises: Promise<FileInfo>[] = []
   if (dt.files) {
     for (let i = 0; i < dt.files.length; i++) {
-      files.push(await makeFileInfo(dt.files[i]))
+      filePromises.push(makeFileInfo(dt.files[i]))
     }
   }
+
+  // === ASYNC PHASE — safe to await now ===
+  const resolvedItems = await Promise.all(itemPromises)
+  for (const entry of resolvedItems) {
+    if (entry) items.push(entry)
+  }
+
+  const resolvedFiles = await Promise.all(filePromises)
+  files.push(...resolvedFiles)
 
   return {
     id: crypto.randomUUID(),
@@ -135,7 +169,28 @@ export async function extractFromDataTransfer(
 }
 
 export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
-  const clipboardItems = await navigator.clipboard.read()
+  let clipboardItems: ClipboardItems
+
+  // Try reading with the `unsanitized` option first (Chrome 122+).
+  // This tells the browser not to strip custom MIME types or sanitize
+  // text/html, which is important for WebFlow's clipboard data.
+  try {
+    clipboardItems = await (navigator.clipboard as unknown as {
+      read(opts: { unsanitized: string[] }): Promise<ClipboardItems>
+    }).read({
+      unsanitized: [
+        "text/html",
+        "text/plain",
+        "application/json",
+        "application/xml",
+        "text/uri-list",
+      ],
+    })
+  } catch {
+    // Fall back to standard read (Firefox, older browsers)
+    clipboardItems = await navigator.clipboard.read()
+  }
+
   const types: ClipboardEntry[] = []
   const items: ClipboardEntry[] = []
   const files: FileInfo[] = []
@@ -144,7 +199,10 @@ export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
     for (const type of item.types) {
       try {
         const blob = await item.getType(type)
-        if (type.startsWith("text/")) {
+
+        // Use isTextMime to also catch application/json, application/xml,
+        // image/svg+xml, etc. — not just text/* prefixed types.
+        if (isTextMime(type)) {
           const text = await readAsText(blob)
           types.push({ type, kind: "string", data: text })
           items.push({ type, kind: "string", data: text })
@@ -155,6 +213,25 @@ export async function extractFromClipboardAPI(): Promise<ClipboardSnapshot> {
             type: blob.type,
             url: URL.createObjectURL(blob),
           }
+
+          // Try reading text content for text-like blobs that isTextMime
+          // didn't catch (e.g. custom vendor types containing json/xml)
+          if (
+            type.includes("json") ||
+            type.includes("xml") ||
+            type.includes("webflow") ||
+            type.includes("text")
+          ) {
+            try {
+              const text = await readAsText(blob)
+              types.push({ type, kind: "string", data: text })
+              items.push({ type, kind: "string", data: text })
+              continue
+            } catch {
+              // fall through to file handling
+            }
+          }
+
           types.push({ type, kind: "file", data: null, file: fi })
           items.push({ type, kind: "file", data: null, file: fi })
         }
